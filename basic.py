@@ -98,17 +98,53 @@ def get_slice(vol: np.ndarray, axis: int, index: int) -> np.ndarray:
     slc_norm = np.rot90(slc_norm)
     return slc_norm
 
+
 def resize_slice_for_display(slc: np.ndarray, size: int = 256) -> np.ndarray:
     """
     Resize a slice to (size, size) so all views appear the same size.
     Input/Output are float32 in [0, 1].
     """
-    # Ensure [0,1]
     slc = np.clip(slc, 0.0, 1.0).astype(np.float32)
     img = Image.fromarray((slc * 255).astype(np.uint8))
     img = img.resize((size, size), Image.BILINEAR)
     return np.asarray(img, dtype=np.float32) / 255.0
 
+
+def resize_mask_for_display(mask: np.ndarray, size: int = 256) -> np.ndarray:
+    """
+    Resize a binary/label mask to (size, size) using nearest-neighbor.
+    Returns a bool mask (True where label > 0).
+    """
+    mask_bin = (mask > 0).astype(np.uint8)
+    img = Image.fromarray(mask_bin * 255)
+    img = img.resize((size, size), Image.NEAREST)
+    arr = np.asarray(img, dtype=np.uint8)
+    return arr > 0
+
+
+def overlay_segmentation(
+    img_slice: np.ndarray,
+    mask_slice: np.ndarray,
+    color=(255, 0, 0),
+    alpha: float = 0.4,
+) -> np.ndarray:
+    """
+    Overlay a segmentation mask on a grayscale image.
+    img_slice: (H, W) float [0,1]
+    mask_slice: (H, W) bool or 0/1
+    Returns RGB float [0,1].
+    """
+    img = np.clip(img_slice, 0.0, 1.0).astype(np.float32)
+    base_gray = (img * 255).astype(np.uint8)
+    h, w = base_gray.shape
+
+    rgb = np.stack([base_gray] * 3, axis=-1).astype(np.float32)
+    mask = mask_slice.astype(bool)
+
+    color_arr = np.array(color, dtype=np.float32).reshape(1, 1, 3)
+
+    rgb[mask] = (1.0 - alpha) * rgb[mask] + alpha * color_arr
+    return (rgb / 255.0).clip(0.0, 1.0)
 
 
 # ------------------------------
@@ -120,15 +156,14 @@ st.set_page_config(
     layout="wide",
 )
 
-st.title("🧠 MRI Sequences Viewer")
+st.title("🧠 MRI Sequences Viewer with Segmentation")
 
 st.markdown(
     """
-Upload multiple MRI sequences (T1, T2, FLAIR, etc.) and:
+Upload MRI sequences (T1, T2, FLAIR, etc.) and an optional **segmentation mask**:
 
-- View **all sequences** in a single plane, or  
-- View **one sequence** with **axial, coronal, and sagittal** slices side by side  
-  and **scroll through the volume** with a single slider.
+- **Single-plane mode**: view all sequences side by side, with mask overlaid where shape matches  
+- **Orthogonal mode**: view one sequence in **axial, coronal, sagittal** with mask overlay  
 """
 )
 
@@ -138,6 +173,14 @@ with st.sidebar:
         "Select one or more files",
         type=["nii", "nii.gz", "npy", "npz", "png", "jpg", "jpeg", "tif", "tiff"],
         accept_multiple_files=True,
+    )
+
+    st.markdown("---")
+    st.header("Segmentation (optional)")
+    seg_file = st.file_uploader(
+        "Upload segmentation mask (same space/shape as your MRI)",
+        type=["nii", "nii.gz", "npy", "npz"],
+        accept_multiple_files=False,
     )
 
     st.markdown("---")
@@ -151,7 +194,6 @@ with st.sidebar:
         index=1,
     )
 
-    # Only used in single-plane mode
     view_plane = st.radio(
         "Single-plane view: choose plane",
         options=["Axial (Z)", "Coronal (Y)", "Sagittal (X)"],
@@ -178,6 +220,17 @@ if uploaded_files:
 if not volumes:
     st.info("👈 Upload one or more MRI sequences from the sidebar to begin.")
     st.stop()
+
+# Load segmentation (if provided)
+seg_volume = None
+seg_label = None
+if seg_file is not None:
+    seg_file.seek(0)
+    try:
+        seg_volume, seg_label = load_volume(seg_file)
+    except Exception as e:
+        st.sidebar.error(f"Error loading segmentation {seg_file.name}: {e}")
+        seg_volume = None
 
 # ------------------------------
 # View mode: Single-plane (all sequences)
@@ -220,12 +273,28 @@ if view_mode == "Single-plane (all sequences)":
             st.subheader(name, help=str(vol.shape))
             try:
                 slc = get_slice(vol, axis=axis, index=slice_index)
-                st.image(
-                    slc,
-                    caption=f"{name} — {view_plane.split()[0]} slice {slice_index}",
-                    use_column_width=True,
-                    clamp=True,
-                )
+                slc = resize_slice_for_display(slc, size=256)
+
+                # Overlay segmentation if shapes match
+                if seg_volume is not None and seg_volume.shape[:3] == vol.shape[:3]:
+                    seg_slc = get_slice(seg_volume, axis=axis, index=slice_index)
+                    seg_mask = resize_mask_for_display(seg_slc, size=256)
+                    img_disp = overlay_segmentation(slc, seg_mask, color=(255, 0, 0), alpha=0.4)
+                    st.image(
+                        img_disp,
+                        caption=f"{name} + seg — {view_plane.split()[0]} slice {slice_index}",
+                        use_column_width=True,
+                        clamp=True,
+                    )
+                else:
+                    if seg_volume is not None:
+                        st.caption("⚠ Seg shape mismatch; not overlaying.")
+                    st.image(
+                        slc,
+                        caption=f"{name} — {view_plane.split()[0]} slice {slice_index}",
+                        use_column_width=True,
+                        clamp=True,
+                    )
             except Exception as e:
                 st.error(f"Error displaying {name}: {e}")
 
@@ -249,6 +318,17 @@ else:
     x, y, z = vol.shape[:3]
     st.caption(f"Volume **{seq_name}** shape: (X={x}, Y={y}, Z={z})")
 
+    # Check seg compatibility
+    use_seg_here = False
+    if seg_volume is not None:
+        if seg_volume.shape[:3] == vol.shape[:3]:
+            use_seg_here = True
+        else:
+            st.warning(
+                f"Segmentation shape {seg_volume.shape} does not match {vol.shape}; "
+                "overlay disabled in orthogonal view."
+            )
+
     # Single scroll slider (0–100%) mapped to indices in each dimension
     scroll_pos = st.slider(
         "Scroll through volume (0–100%)",
@@ -269,47 +349,83 @@ else:
 
     col_ax, col_cor, col_sag = st.columns(3)
 
-    # Axial (Z)
+    # ------- Axial (Z) -------
     with col_ax:
         st.markdown("**Axial (Z)**")
         try:
             slc_ax = get_slice(vol, axis=2, index=idx_axial)
             slc_ax = resize_slice_for_display(slc_ax, size=256)
-            st.image(
-                slc_ax,
-                caption=f"Axial slice {idx_axial}",
-                use_column_width=True,
-                clamp=True,
-            )
+
+            if use_seg_here:
+                seg_ax = get_slice(seg_volume, axis=2, index=idx_axial)
+                seg_ax_mask = resize_mask_for_display(seg_ax, size=256)
+                img_ax = overlay_segmentation(slc_ax, seg_ax_mask, color=(255, 0, 0), alpha=0.4)
+                st.image(
+                    img_ax,
+                    caption=f"Axial slice {idx_axial} + seg",
+                    use_column_width=True,
+                    clamp=True,
+                )
+            else:
+                st.image(
+                    slc_ax,
+                    caption=f"Axial slice {idx_axial}",
+                    use_column_width=True,
+                    clamp=True,
+                )
         except Exception as e:
             st.error(f"Error axial view: {e}")
-    
-    # Coronal (Y)
+
+    # ------- Coronal (Y) -------
     with col_cor:
         st.markdown("**Coronal (Y)**")
         try:
             slc_cor = get_slice(vol, axis=1, index=idx_coronal)
             slc_cor = resize_slice_for_display(slc_cor, size=256)
-            st.image(
-                slc_cor,
-                caption=f"Coronal slice {idx_coronal}",
-                use_column_width=True,
-                clamp=True,
-            )
+
+            if use_seg_here:
+                seg_cor = get_slice(seg_volume, axis=1, index=idx_coronal)
+                seg_cor_mask = resize_mask_for_display(seg_cor, size=256)
+                img_cor = overlay_segmentation(slc_cor, seg_cor_mask, color=(255, 0, 0), alpha=0.4)
+                st.image(
+                    img_cor,
+                    caption=f"Coronal slice {idx_coronal} + seg",
+                    use_column_width=True,
+                    clamp=True,
+                )
+            else:
+                st.image(
+                    slc_cor,
+                    caption=f"Coronal slice {idx_coronal}",
+                    use_column_width=True,
+                    clamp=True,
+                )
         except Exception as e:
             st.error(f"Error coronal view: {e}")
-    
-    # Sagittal (X)
+
+    # ------- Sagittal (X) -------
     with col_sag:
         st.markdown("**Sagittal (X)**")
         try:
             slc_sag = get_slice(vol, axis=0, index=idx_sagittal)
             slc_sag = resize_slice_for_display(slc_sag, size=256)
-            st.image(
-                slc_sag,
-                caption=f"Sagittal slice {idx_sagittal}",
-                use_column_width=True,
-                clamp=True,
-            )
+
+            if use_seg_here:
+                seg_sag = get_slice(seg_volume, axis=0, index=idx_sagittal)
+                seg_sag_mask = resize_mask_for_display(seg_sag, size=256)
+                img_sag = overlay_segmentation(slc_sag, seg_sag_mask, color=(255, 0, 0), alpha=0.4)
+                st.image(
+                    img_sag,
+                    caption=f"Sagittal slice {idx_sagittal} + seg",
+                    use_column_width=True,
+                    clamp=True,
+                )
+            else:
+                st.image(
+                    slc_sag,
+                    caption=f"Sagittal slice {idx_sagittal}",
+                    use_column_width=True,
+                    clamp=True,
+                )
         except Exception as e:
             st.error(f"Error sagittal view: {e}")
