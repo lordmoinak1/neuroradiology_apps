@@ -80,8 +80,7 @@ def load_volume(file) -> Tuple[np.ndarray, str]:
 
 def get_slice(vol: np.ndarray, axis: int, index: int) -> np.ndarray:
     """
-    Extract a single slice along `axis` at position `index`.
-    Normalizes to [0, 1] and rotates for nicer viewing.
+    Image slice: normalize to [0,1], rotate for nicer viewing.
     """
     if axis >= vol.ndim:
         raise ValueError(f"Axis {axis} out of range for volume shape {vol.shape}")
@@ -99,10 +98,23 @@ def get_slice(vol: np.ndarray, axis: int, index: int) -> np.ndarray:
     return slc_norm
 
 
+def get_seg_slice(vol: np.ndarray, axis: int, index: int) -> np.ndarray:
+    """
+    Segmentation slice: no normalization, just rotate.
+    Keeps integer labels intact.
+    """
+    if axis >= vol.ndim:
+        raise ValueError(f"Axis {axis} out of range for volume shape {vol.shape}")
+
+    slc = np.take(vol, index, axis=axis)
+    slc = np.nan_to_num(slc)
+    slc = np.rot90(slc)
+    return slc
+
+
 def resize_slice_for_display(slc: np.ndarray, size: int = 256) -> np.ndarray:
     """
-    Resize a slice to (size, size) so all views appear the same size.
-    Input/Output are float32 in [0, 1].
+    Resize image slice to (size, size) in [0,1].
     """
     slc = np.clip(slc, 0.0, 1.0).astype(np.float32)
     img = Image.fromarray((slc * 255).astype(np.uint8))
@@ -112,38 +124,49 @@ def resize_slice_for_display(slc: np.ndarray, size: int = 256) -> np.ndarray:
 
 def resize_mask_for_display(mask: np.ndarray, size: int = 256) -> np.ndarray:
     """
-    Resize a binary/label mask to (size, size) using nearest-neighbor.
-    Returns a bool mask (True where label > 0).
+    Resize label mask to (size, size) using nearest-neighbor.
+    Returns int labels (0,1,2,...).
     """
-    mask_bin = (mask > 0).astype(np.uint8)
-    img = Image.fromarray(mask_bin * 255)
+    mask_int = mask.astype(int)
+    if mask_int.min() < 0:
+        mask_int = mask_int - mask_int.min()
+
+    mask_uint8 = np.clip(mask_int, 0, 255).astype(np.uint8)
+    img = Image.fromarray(mask_uint8, mode="L")
     img = img.resize((size, size), Image.NEAREST)
     arr = np.asarray(img, dtype=np.uint8)
-    return arr > 0
+    return arr.astype(int)
 
 
-def overlay_segmentation(
+def overlay_segmentation_multi(
     img_slice: np.ndarray,
     mask_slice: np.ndarray,
-    color=(255, 0, 0),
+    label_colors: dict,
     alpha: float = 0.4,
 ) -> np.ndarray:
     """
-    Overlay a segmentation mask on a grayscale image.
-    img_slice: (H, W) float [0,1]
-    mask_slice: (H, W) bool or 0/1
+    Overlay multi-label segmentation on a grayscale image.
+    img_slice: (H,W) float [0,1]
+    mask_slice: (H,W) int labels
+    label_colors: {label: (R,G,B)}
     Returns RGB float [0,1].
     """
     img = np.clip(img_slice, 0.0, 1.0).astype(np.float32)
-    base_gray = (img * 255).astype(np.uint8)
-    h, w = base_gray.shape
+    base = (img * 255).astype(np.uint8)
+    h, w = base.shape
 
-    rgb = np.stack([base_gray] * 3, axis=-1).astype(np.float32)
-    mask = mask_slice.astype(bool)
+    rgb = np.stack([base] * 3, axis=-1).astype(np.float32)
+    mask_int = mask_slice.astype(int)
 
-    color_arr = np.array(color, dtype=np.float32).reshape(1, 1, 3)
+    for lab, color in label_colors.items():
+        if lab == 0:
+            continue
+        region = mask_int == lab
+        if not np.any(region):
+            continue
+        color_arr = np.array(color, dtype=np.float32).reshape(1, 1, 3)
+        rgb[region] = (1.0 - alpha) * rgb[region] + alpha * color_arr
 
-    rgb[mask] = (1.0 - alpha) * rgb[mask] + alpha * color_arr
     return (rgb / 255.0).clip(0.0, 1.0)
 
 
@@ -156,13 +179,13 @@ st.set_page_config(
     layout="wide",
 )
 
-st.title("🧠 MRI Sequences Viewer with Segmentation")
+st.title("🧠 MRI Sequences Viewer with Multi-label Segmentation")
 
 st.markdown(
     """
 Upload MRI sequences (T1, T2, FLAIR, etc.) and an optional **segmentation mask**:
 
-- **Single-plane mode**: view all sequences side by side, with mask overlaid where shape matches  
+- **Single-plane mode**: view all sequences side by side, with mask overlaid  
 - **Orthogonal mode**: view one sequence in **axial, coronal, sagittal** with mask overlay  
 """
 )
@@ -224,6 +247,8 @@ if not volumes:
 # Load segmentation (if provided)
 seg_volume = None
 seg_label = None
+label_colors = None
+
 if seg_file is not None:
     seg_file.seek(0)
     try:
@@ -231,6 +256,40 @@ if seg_file is not None:
     except Exception as e:
         st.sidebar.error(f"Error loading segmentation {seg_file.name}: {e}")
         seg_volume = None
+
+# Build label -> color mapping
+if seg_volume is not None:
+    labels = np.unique(seg_volume.astype(int))
+    labels = labels[labels > 0]  # ignore background
+
+    palette = [
+        (255, 0, 0),      # red
+        (0, 255, 0),      # green
+        (0, 0, 255),      # blue
+        (255, 255, 0),    # yellow
+        (255, 0, 255),    # magenta
+        (0, 255, 255),    # cyan
+        (255, 165, 0),    # orange
+        (128, 0, 128),    # purple
+        (0, 128, 128),    # teal
+        (255, 192, 203),  # pink
+    ]
+
+    label_colors = {
+        int(lab): palette[i % len(palette)]
+        for i, lab in enumerate(labels)
+    }
+
+    st.sidebar.markdown("**Segmentation labels:**")
+    for lab, col in label_colors.items():
+        r, g, b = col
+        st.sidebar.markdown(
+            f"<span style='display:inline-block;width:12px;height:12px;"
+            f"background-color: rgb({r},{g},{b});"
+            f"margin-right:6px;'></span> Label {lab}",
+            unsafe_allow_html=True,
+        )
+
 
 # ------------------------------
 # View mode: Single-plane (all sequences)
@@ -275,11 +334,16 @@ if view_mode == "Single-plane (all sequences)":
                 slc = get_slice(vol, axis=axis, index=slice_index)
                 slc = resize_slice_for_display(slc, size=256)
 
-                # Overlay segmentation if shapes match
-                if seg_volume is not None and seg_volume.shape[:3] == vol.shape[:3]:
-                    seg_slc = get_slice(seg_volume, axis=axis, index=slice_index)
+                if (
+                    seg_volume is not None
+                    and seg_volume.shape[:3] == vol.shape[:3]
+                    and label_colors is not None
+                ):
+                    seg_slc = get_seg_slice(seg_volume, axis=axis, index=slice_index)
                     seg_mask = resize_mask_for_display(seg_slc, size=256)
-                    img_disp = overlay_segmentation(slc, seg_mask, color=(255, 0, 0), alpha=0.4)
+                    img_disp = overlay_segmentation_multi(
+                        slc, seg_mask, label_colors, alpha=0.4
+                    )
                     st.image(
                         img_disp,
                         caption=f"{name} + seg — {view_plane.split()[0]} slice {slice_index}",
@@ -287,7 +351,7 @@ if view_mode == "Single-plane (all sequences)":
                         clamp=True,
                     )
                 else:
-                    if seg_volume is not None:
+                    if seg_volume is not None and seg_volume.shape[:3] != vol.shape[:3]:
                         st.caption("⚠ Seg shape mismatch; not overlaying.")
                     st.image(
                         slc,
@@ -318,7 +382,6 @@ else:
     x, y, z = vol.shape[:3]
     st.caption(f"Volume **{seq_name}** shape: (X={x}, Y={y}, Z={z})")
 
-    # Check seg compatibility
     use_seg_here = False
     if seg_volume is not None:
         if seg_volume.shape[:3] == vol.shape[:3]:
@@ -329,7 +392,6 @@ else:
                 "overlay disabled in orthogonal view."
             )
 
-    # Single scroll slider (0–100%) mapped to indices in each dimension
     scroll_pos = st.slider(
         "Scroll through volume (0–100%)",
         min_value=0.0,
@@ -349,17 +411,19 @@ else:
 
     col_ax, col_cor, col_sag = st.columns(3)
 
-    # ------- Axial (Z) -------
+    # Axial
     with col_ax:
         st.markdown("**Axial (Z)**")
         try:
             slc_ax = get_slice(vol, axis=2, index=idx_axial)
             slc_ax = resize_slice_for_display(slc_ax, size=256)
 
-            if use_seg_here:
-                seg_ax = get_slice(seg_volume, axis=2, index=idx_axial)
+            if use_seg_here and label_colors is not None:
+                seg_ax = get_seg_slice(seg_volume, axis=2, index=idx_axial)
                 seg_ax_mask = resize_mask_for_display(seg_ax, size=256)
-                img_ax = overlay_segmentation(slc_ax, seg_ax_mask, color=(255, 0, 0), alpha=0.4)
+                img_ax = overlay_segmentation_multi(
+                    slc_ax, seg_ax_mask, label_colors, alpha=0.4
+                )
                 st.image(
                     img_ax,
                     caption=f"Axial slice {idx_axial} + seg",
@@ -376,17 +440,19 @@ else:
         except Exception as e:
             st.error(f"Error axial view: {e}")
 
-    # ------- Coronal (Y) -------
+    # Coronal
     with col_cor:
         st.markdown("**Coronal (Y)**")
         try:
             slc_cor = get_slice(vol, axis=1, index=idx_coronal)
             slc_cor = resize_slice_for_display(slc_cor, size=256)
 
-            if use_seg_here:
-                seg_cor = get_slice(seg_volume, axis=1, index=idx_coronal)
+            if use_seg_here and label_colors is not None:
+                seg_cor = get_seg_slice(seg_volume, axis=1, index=idx_coronal)
                 seg_cor_mask = resize_mask_for_display(seg_cor, size=256)
-                img_cor = overlay_segmentation(slc_cor, seg_cor_mask, color=(255, 0, 0), alpha=0.4)
+                img_cor = overlay_segmentation_multi(
+                    slc_cor, seg_cor_mask, label_colors, alpha=0.4
+                )
                 st.image(
                     img_cor,
                     caption=f"Coronal slice {idx_coronal} + seg",
@@ -403,17 +469,19 @@ else:
         except Exception as e:
             st.error(f"Error coronal view: {e}")
 
-    # ------- Sagittal (X) -------
+    # Sagittal
     with col_sag:
         st.markdown("**Sagittal (X)**")
         try:
             slc_sag = get_slice(vol, axis=0, index=idx_sagittal)
             slc_sag = resize_slice_for_display(slc_sag, size=256)
 
-            if use_seg_here:
-                seg_sag = get_slice(seg_volume, axis=0, index=idx_sagittal)
+            if use_seg_here and label_colors is not None:
+                seg_sag = get_seg_slice(seg_volume, axis=0, index=idx_sagittal)
                 seg_sag_mask = resize_mask_for_display(seg_sag, size=256)
-                img_sag = overlay_segmentation(slc_sag, seg_sag_mask, color=(255, 0, 0), alpha=0.4)
+                img_sag = overlay_segmentation_multi(
+                    slc_sag, seg_sag_mask, label_colors, alpha=0.4
+                )
                 st.image(
                     img_sag,
                     caption=f"Sagittal slice {idx_sagittal} + seg",
