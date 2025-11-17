@@ -19,44 +19,52 @@ from PIL import Image
 def load_volume(file) -> Tuple[np.ndarray, str]:
     """
     Load a 3D volume or 2D image from an uploaded file.
-    Returns: (volume: np.ndarray, label: str)
-    volume shape: (X, Y, Z) for 3D or (H, W, 1) for 2D.
+    Supports .nii, .nii.gz, .npy, .npz, and image files.
     """
-    filename = file.name.lower()
 
-    # NIfTI
+    filename = file.name.lower()
+    label = filename
+
+    # Convert UploadedFile to bytes
+    raw = file.read()
+    bio = io.BytesIO(raw)
+
+    # ------------------------
+    # NIfTI (.nii / .nii.gz)
+    # ------------------------
     if filename.endswith(".nii") or filename.endswith(".nii.gz"):
         if nib is None:
-            raise ImportError("nibabel is required to load NIfTI files. Please install nibabel.")
-        img = nib.load(file)
+            raise ImportError("Please install nibabel for NIfTI support.")
+        img = nib.load(bio)   # <-- FIX: read from BytesIO
         vol = img.get_fdata().astype(np.float32)
-        label = filename
-    # NPY
+        return vol, label
+
+    # ------------------------
+    # NumPy .npy
+    # ------------------------
     elif filename.endswith(".npy"):
-        vol = np.load(file).astype(np.float32)
-        label = filename
-    # NPZ (take first array)
+        bio.seek(0)
+        vol = np.load(bio).astype(np.float32)
+        return vol, label
+
+    # ------------------------
+    # NumPy .npz
+    # ------------------------
     elif filename.endswith(".npz"):
-        data = np.load(file)
+        bio.seek(0)
+        data = np.load(bio)
         key = list(data.keys())[0]
         vol = data[key].astype(np.float32)
-        label = f"{filename} ({key})"
-    # 2D image
+        return vol, f"{filename} ({key})"
+
+    # ------------------------
+    # Image files
+    # ------------------------
     else:
-        pil_img = Image.open(file).convert("L")  # grayscale
+        pil_img = Image.open(bio).convert("L")
         arr = np.array(pil_img, dtype=np.float32)
-        vol = arr[..., None]  # (H, W, 1)
-        label = filename
-
-    # Ensure at least 3D: (X, Y, Z)
-    if vol.ndim == 2:
-        vol = vol[..., None]
-    elif vol.ndim > 3:
-        # If 4D, e.g., (X, Y, Z, T), take first volume
-        vol = vol[..., 0]
-
-    return vol, label
-
+        vol = arr[..., None]
+        return vol, label
 
 def get_slice(vol: np.ndarray, axis: int, index: int) -> np.ndarray:
     """
