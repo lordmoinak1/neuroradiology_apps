@@ -1,4 +1,4 @@
-import io
+roimport io
 import os
 import tempfile
 from typing import Dict, Tuple
@@ -179,7 +179,7 @@ st.set_page_config(
     layout="wide",
 )
 
-st.title("🧠 MRI Sequences Viewer with Multi-label Segmentation")
+st.title("🧠 NeuroINK")
 
 st.markdown(
     """
