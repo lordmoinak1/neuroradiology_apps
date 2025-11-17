@@ -1,15 +1,17 @@
 import io
+import os
+import tempfile
 from typing import Dict, Tuple
 
 import numpy as np
 import streamlit as st
+from PIL import Image
 
 try:
     import nibabel as nib
 except ImportError:
     nib = None
 
-from PIL import Image
 
 
 # ------------------------------
@@ -20,14 +22,10 @@ def load_volume(file) -> Tuple[np.ndarray, str]:
     """
     Load a 3D volume or 2D image from an uploaded file.
     Supports .nii, .nii.gz, .npy, .npz, and image files.
+    Returns: (volume: np.ndarray, label: str)
     """
-
     filename = file.name.lower()
-    label = filename
-
-    # Convert UploadedFile to bytes
-    raw = file.read()
-    bio = io.BytesIO(raw)
+    label = file.name
 
     # ------------------------
     # NIfTI (.nii / .nii.gz)
@@ -35,36 +33,62 @@ def load_volume(file) -> Tuple[np.ndarray, str]:
     if filename.endswith(".nii") or filename.endswith(".nii.gz"):
         if nib is None:
             raise ImportError("Please install nibabel for NIfTI support.")
-        img = nib.load(bio)   # <-- FIX: read from BytesIO
-        vol = img.get_fdata().astype(np.float32)
-        return vol, label
+
+        # Decide suffix for temp file
+        suffix = ".nii.gz" if filename.endswith(".nii.gz") else ".nii"
+
+        # Write uploaded bytes to a temporary file
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            tmp.write(file.read())
+            tmp_path = tmp.name
+
+        try:
+            img = nib.load(tmp_path)
+            vol = img.get_fdata().astype(np.float32)
+        finally:
+            # Clean up temp file
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
 
     # ------------------------
     # NumPy .npy
     # ------------------------
     elif filename.endswith(".npy"):
-        bio.seek(0)
+        raw = file.read()
+        bio = io.BytesIO(raw)
         vol = np.load(bio).astype(np.float32)
-        return vol, label
 
     # ------------------------
-    # NumPy .npz
+    # NumPy .npz  (take first array)
     # ------------------------
     elif filename.endswith(".npz"):
-        bio.seek(0)
+        raw = file.read()
+        bio = io.BytesIO(raw)
         data = np.load(bio)
         key = list(data.keys())[0]
         vol = data[key].astype(np.float32)
-        return vol, f"{filename} ({key})"
+        label = f"{filename} ({key})"
 
     # ------------------------
-    # Image files
+    # Image files (PNG/JPG/…)
     # ------------------------
     else:
+        raw = file.read()
+        bio = io.BytesIO(raw)
         pil_img = Image.open(bio).convert("L")
         arr = np.array(pil_img, dtype=np.float32)
-        vol = arr[..., None]
-        return vol, label
+        vol = arr[..., None]  # (H, W, 1)
+
+    # ------------------------
+    # Ensure (X, Y, Z) volume
+    # ------------------------
+    if vol.ndim == 2:
+        vol = vol[..., None]
+    elif vol.ndim > 3:
+        # e.g. (X, Y, Z, T) -> take first timepoint
+        vol = vol[..., 0]
+
+    return vol, label
 
 def get_slice(vol: np.ndarray, axis: int, index: int) -> np.ndarray:
     """
