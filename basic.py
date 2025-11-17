@@ -145,6 +145,7 @@ volumes: Dict[str, np.ndarray] = {}
 if uploaded_files:
     for f in uploaded_files:
         try:
+            f.seek(0)
             vol, label = load_volume(f)
             volumes[label] = vol
         except Exception as e:
