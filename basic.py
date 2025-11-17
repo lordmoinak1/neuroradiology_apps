@@ -98,6 +98,18 @@ def get_slice(vol: np.ndarray, axis: int, index: int) -> np.ndarray:
     slc_norm = np.rot90(slc_norm)
     return slc_norm
 
+def resize_slice_for_display(slc: np.ndarray, size: int = 256) -> np.ndarray:
+    """
+    Resize a slice to (size, size) so all views appear the same size.
+    Input/Output are float32 in [0, 1].
+    """
+    # Ensure [0,1]
+    slc = np.clip(slc, 0.0, 1.0).astype(np.float32)
+    img = Image.fromarray((slc * 255).astype(np.uint8))
+    img = img.resize((size, size), Image.BILINEAR)
+    return np.asarray(img, dtype=np.float32) / 255.0
+
+
 
 # ------------------------------
 # Streamlit UI
@@ -262,6 +274,7 @@ else:
         st.markdown("**Axial (Z)**")
         try:
             slc_ax = get_slice(vol, axis=2, index=idx_axial)
+            slc_ax = resize_slice_for_display(slc_ax, size=256)
             st.image(
                 slc_ax,
                 caption=f"Axial slice {idx_axial}",
@@ -270,12 +283,13 @@ else:
             )
         except Exception as e:
             st.error(f"Error axial view: {e}")
-
+    
     # Coronal (Y)
     with col_cor:
         st.markdown("**Coronal (Y)**")
         try:
             slc_cor = get_slice(vol, axis=1, index=idx_coronal)
+            slc_cor = resize_slice_for_display(slc_cor, size=256)
             st.image(
                 slc_cor,
                 caption=f"Coronal slice {idx_coronal}",
@@ -284,12 +298,13 @@ else:
             )
         except Exception as e:
             st.error(f"Error coronal view: {e}")
-
+    
     # Sagittal (X)
     with col_sag:
         st.markdown("**Sagittal (X)**")
         try:
             slc_sag = get_slice(vol, axis=0, index=idx_sagittal)
+            slc_sag = resize_slice_for_display(slc_sag, size=256)
             st.image(
                 slc_sag,
                 caption=f"Sagittal slice {idx_sagittal}",
