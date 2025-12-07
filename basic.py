@@ -265,7 +265,7 @@ if seg_volume is not None:
 # Axial Side-by-Side View (T1c, T2f, T2w)
 # ------------------------------
 
-st.subheader("Axial View — Side by Side")
+# st.subheader("Axial View — Side by Side")
 
 # Force axial axis
 axis = 2  
@@ -314,40 +314,40 @@ for col, (name, vol) in zip(cols, volumes.items()):
 
 
 
-# ------------------------------
-# Orthogonal View
-# ------------------------------
+# # ------------------------------
+# # Orthogonal View
+# # ------------------------------
 
-else:
-    seq_name = st.selectbox("Select sequence", list(volumes.keys()))
-    vol = volumes[seq_name]
-    x, y, z = vol.shape[:3]
+# else:
+#     seq_name = st.selectbox("Select sequence", list(volumes.keys()))
+#     vol = volumes[seq_name]
+#     x, y, z = vol.shape[:3]
 
-    scroll_pos = st.slider("Scroll", 0.0, 1.0, 0.5)
+#     scroll_pos = st.slider("Scroll", 0.0, 1.0, 0.5)
 
-    idx_ax = int(scroll_pos * (z - 1))
-    idx_cor = int(scroll_pos * (y - 1))
-    idx_sag = int(scroll_pos * (x - 1))
+#     idx_ax = int(scroll_pos * (z - 1))
+#     idx_cor = int(scroll_pos * (y - 1))
+#     idx_sag = int(scroll_pos * (x - 1))
 
-    c1, c2, c3 = st.columns(3)
+#     c1, c2, c3 = st.columns(3)
 
-    with c1:
-        st.image(
-            resize_slice_for_display(get_slice(vol, 2, idx_ax)),
-            caption=f"Axial {idx_ax}",
-            use_column_width=True,
-        )
+#     with c1:
+#         st.image(
+#             resize_slice_for_display(get_slice(vol, 2, idx_ax)),
+#             caption=f"Axial {idx_ax}",
+#             use_column_width=True,
+#         )
 
-    with c2:
-        st.image(
-            resize_slice_for_display(get_slice(vol, 1, idx_cor)),
-            caption=f"Coronal {idx_cor}",
-            use_column_width=True,
-        )
+#     with c2:
+#         st.image(
+#             resize_slice_for_display(get_slice(vol, 1, idx_cor)),
+#             caption=f"Coronal {idx_cor}",
+#             use_column_width=True,
+#         )
 
-    with c3:
-        st.image(
-            resize_slice_for_display(get_slice(vol, 0, idx_sag)),
-            caption=f"Sagittal {idx_sag}",
-            use_column_width=True,
-        )
+#     with c3:
+#         st.image(
+#             resize_slice_for_display(get_slice(vol, 0, idx_sag)),
+#             caption=f"Sagittal {idx_sag}",
+#             use_column_width=True,
+#         )
