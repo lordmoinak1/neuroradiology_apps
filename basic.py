@@ -12,6 +12,9 @@ try:
 except ImportError:
     nib = None
 
+import streamlit.components.v1 as components
+
+
 
 # ------------------------------
 # Utility functions
@@ -77,6 +80,31 @@ def load_volume(file) -> Tuple[np.ndarray, str]:
 
     return vol, label
 
+def mouse_wheel_slider(key: str, min_val: int, max_val: int, step: int = 1):
+    # Initialize if missing
+    if key not in st.session_state:
+        st.session_state[key] = (min_val + max_val) // 2
+
+    components.html(
+        """
+        <script>
+        const doc = window.parent.document;
+        doc.addEventListener("wheel", function(e) {{
+            e.preventDefault();
+            let delta = Math.sign(e.deltaY);
+            let val = {st.session_state[key]} + delta * {step};
+            val = Math.max({min_val}, Math.min({max_val}, val));
+            window.parent.postMessage({{
+                type: "streamlit:setSessionState",
+                key: "{key}",
+                value: val
+            }}, "*");
+        }}, {{ passive: false }});
+        </script>
+        """,
+        height=0,
+    )
+    return st.session_state[key]
 
 def get_slice(vol: np.ndarray, axis: int, index: int) -> np.ndarray:
     """
@@ -312,13 +340,22 @@ if view_mode == "Single-plane (all sequences)":
         st.error("Could not determine slice dimension for the chosen plane.")
         st.stop()
 
-    slice_index = st.slider(
-        "Slice index",
-        min_value=0,
-        max_value=max_slices - 1,
-        value=max_slices // 2,
+    slice_index = mouse_wheel_slider(
+        key="slice_index_scroll",
+        min_val=0,
+        max_val=max_slices - 1,
         step=1,
     )
+    
+    st.slider(
+        "Slice index (scroll with mouse)",
+        min_value=0,
+        max_value=max_slices - 1,
+        value=slice_index,
+        step=1,
+        key="slice_index_scroll",
+    )
+
 
     st.caption(
         f"Showing **slice {slice_index}** along axis **{axis}** "
@@ -392,12 +429,22 @@ else:
                 "overlay disabled in orthogonal view."
             )
 
-    scroll_pos = st.slider(
-        "Scroll through volume (0–100%)",
-        min_value=0.0,
-        max_value=1.0,
-        value=0.5,
-        step=0.01,
+    scroll_index = mouse_wheel_slider(
+        key="ortho_scroll",
+        min_val=0,
+        max_val=100,
+        step=1,
+    )
+    
+    scroll_pos = scroll_index / 100.0
+
+    st.slider(
+        "Scroll through volume (mouse wheel enabled)",
+        min_value=0,
+        max_value=100,
+        value=scroll_index,
+        step=1,
+        key="ortho_scroll",
     )
 
     idx_axial = int(scroll_pos * (z - 1))     # axis=2
