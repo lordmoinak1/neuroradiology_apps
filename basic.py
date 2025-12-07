@@ -261,41 +261,57 @@ if seg_volume is not None:
 # Single-plane View
 # ------------------------------
 
-if view_mode == "Single-plane (all sequences)":
-    axis_map = {"Axial (Z)": 2, "Coronal (Y)": 1, "Sagittal (X)": 0}
-    axis = axis_map[view_plane]
+# ------------------------------
+# Axial Side-by-Side View (T1c, T2f, T2w)
+# ------------------------------
 
-    max_slices = max(vol.shape[axis] for vol in volumes.values())
+st.subheader("Axial View — Side by Side")
 
-    slice_index = st.slider(
-        "Slice index",
-        0,
-        max_slices - 1,
-        max_slices // 2,
-        step=1,
-    )
+# Force axial axis
+axis = 2  
 
-    cols = st.columns(len(volumes))
+# Ensure exactly 3 sequences are uploaded
+if len(volumes) != 3:
+    st.warning("⚠️ Please upload exactly 3 sequences: T1c, T2f, and T2w.")
+    st.stop()
 
-    for col, (name, vol) in zip(cols, volumes.items()):
-        with col:
-            slc = resize_slice_for_display(
-                get_slice(vol, axis, slice_index)
+# Find smallest Z so slider never goes out of bounds
+max_slices = min(vol.shape[axis] for vol in volumes.values())
+
+slice_index = st.slider(
+    "Axial Slice Index",
+    0,
+    max_slices - 1,
+    max_slices // 2,
+    step=1,
+)
+
+cols = st.columns(3)
+
+for col, (name, vol) in zip(cols, volumes.items()):
+    with col:
+        slc = resize_slice_for_display(
+            get_slice(vol, axis, slice_index)
+        )
+
+        if (
+            seg_volume is not None
+            and seg_volume.shape[:3] == vol.shape[:3]
+            and label_colors is not None
+        ):
+            seg_slc = resize_mask_for_display(
+                get_seg_slice(seg_volume, axis, slice_index)
+            )
+            slc = overlay_segmentation_multi(
+                slc, seg_slc, label_colors
             )
 
-            if (
-                seg_volume is not None
-                and seg_volume.shape[:3] == vol.shape[:3]
-                and label_colors is not None
-            ):
-                seg_slc = resize_mask_for_display(
-                    get_seg_slice(seg_volume, axis, slice_index)
-                )
-                slc = overlay_segmentation_multi(
-                    slc, seg_slc, label_colors
-                )
+        st.image(
+            slc,
+            caption=f"{name} — Axial {slice_index}",
+            use_column_width=True,
+        )
 
-            st.image(slc, caption=name, use_column_width=True)
 
 
 # ------------------------------
