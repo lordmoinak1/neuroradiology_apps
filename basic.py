@@ -152,14 +152,14 @@ def overlay_segmentation_multi(
 st.set_page_config(page_title="MRI Sequence Viewer", layout="wide")
 st.title("🧠 NeuroINK")
 
-st.markdown(
-    """
-Upload MRI sequences (T1, T2, FLAIR, etc.) and an optional **segmentation mask**:
+# st.markdown(
+#     """
+# Upload MRI sequences (T1, T2, FLAIR, etc.) and an optional **segmentation mask**:
 
-- **Single-plane mode**: view all sequences side by side, with mask overlaid  
-- **Orthogonal mode**: view one sequence in **axial, coronal, sagittal** with mask overlay  
-"""
-)
+# - **Single-plane mode**: view all sequences side by side, with mask overlaid  
+# - **Orthogonal mode**: view one sequence in **axial, coronal, sagittal** with mask overlay  
+# """
+# )
 
 with st.sidebar:
     st.header("Upload MRI Sequences")
