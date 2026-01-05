@@ -1,40 +1,31 @@
-import io
 import os
 import tempfile
-from typing import Tuple
+from typing import Dict
 
 import numpy as np
 import streamlit as st
 from PIL import Image
+import nibabel as nib
+from scipy.ndimage import label as cc_label
 
-try:
-    import nibabel as nib
-except ImportError:
-    nib = None
+
+# ==============================
+# Constants
+# ==============================
+
+MODALITY_MAP = {
+    "_0000": "T1C",
+    "_0001": "T1N",
+    "_0002": "T2F",
+    "_0003": "T2W",
+}
 
 
 # ==============================
 # Utility functions
 # ==============================
 
-def validate_braTS_file(file, expected_tag=None):
-    name = file.name.lower()
-
-    if not name.endswith(".nii.gz"):
-        st.error(f"{file.name} is not a .nii.gz file")
-        st.stop()
-
-    if expected_tag and expected_tag not in name:
-        st.error(
-            f"{file.name} does not match expected BraTS modality tag {expected_tag}"
-        )
-        st.stop()
-
-
-def load_nifti(file) -> Tuple[np.ndarray, np.ndarray]:
-    if nib is None:
-        raise ImportError("Please install nibabel")
-
+def load_nifti(file):
     with tempfile.NamedTemporaryFile(suffix=".nii.gz", delete=False) as tmp:
         tmp.write(file.read())
         path = tmp.name
@@ -52,15 +43,18 @@ def load_nifti(file) -> Tuple[np.ndarray, np.ndarray]:
     return vol, affine
 
 
-def get_slice(vol, axis, idx):
-    slc = np.take(vol, idx, axis=axis)
+def normalize_slice(slc):
     slc = np.nan_to_num(slc)
     vmin, vmax = slc.min(), slc.max()
     if vmax > vmin:
         slc = (slc - vmin) / (vmax - vmin)
     else:
         slc = np.zeros_like(slc)
-    return np.rot90(slc)
+    return slc
+
+
+def get_slice(vol, axis, idx):
+    return np.rot90(normalize_slice(np.take(vol, idx, axis=axis)))
 
 
 def resize_img(img, size=256):
@@ -86,83 +80,85 @@ def overlay_segmentation(img, mask, colors, alpha=0.4):
     return np.clip(rgb / 255.0, 0, 1)
 
 
-def calculate_segmentation_volume(seg, affine):
-    voxel_count = int(np.sum(seg > 0))
+def calculate_volume(seg, affine):
+    voxels = int(np.sum(seg > 0))
     spacing = np.sqrt((affine[:3, :3] ** 2).sum(axis=0))
-    voxel_volume = np.prod(spacing)
-    volume_mm3 = voxel_count * voxel_volume
-    volume_ml = volume_mm3 / 1000.0
-    return voxel_count, volume_mm3, volume_ml
+    voxel_vol = np.prod(spacing)
+    mm3 = voxels * voxel_vol
+    ml = mm3 / 1000.0
+    return voxels, mm3, ml
+
+
+def count_lesions(seg):
+    structure = np.ones((3, 3, 3), dtype=int)  # 26-connectivity
+    _, num = cc_label(seg > 0, structure=structure)
+    return num
 
 
 # ==============================
 # Streamlit UI
 # ==============================
 
-st.set_page_config(page_title="NeuroINK", layout="wide")
-st.title("🧠 NeuroINK — BraTS MRI Viewer")
+st.set_page_config(page_title="NeuroTrack", layout="wide")
+st.title("🧠 NeuroTrack")
 
 with st.sidebar:
-    st.header("MRI Sequences (BraTS .nii.gz)")
+    st.header("Upload BraTS MRI Sequences")
 
-    t1c_file = st.file_uploader(
-        "Upload T1C (_0000.nii.gz)",
+    files = st.file_uploader(
+        "Upload *_0000/0001/0002/0003.nii.gz together",
         type=["gz"],
-        key="t1c",
+        accept_multiple_files=True,
+        key="mri",
     )
 
-    t2f_file = st.file_uploader(
-        "Upload T2F (_0002.nii.gz)",
-        type=["gz"],
-        key="t2f",
-    )
-
-    t2w_file = st.file_uploader(
-        "Upload T2W (_0003.nii.gz)",
-        type=["gz"],
-        key="t2w",
-    )
-
-    st.header("Segmentation")
+    st.header("Segmentation (optional)")
     seg_file = st.file_uploader(
-        "Upload Segmentation (.nii.gz)",
+        "Upload segmentation (.nii.gz)",
         type=["gz"],
         key="seg",
     )
 
 
 # ==============================
-# Validation
+# Validate & load MRI sequences
 # ==============================
 
-if not all([t1c_file, t2f_file, t2w_file]):
-    st.info("👈 Upload T1C, T2F, and T2W to begin.")
+if not files:
+    st.info("👈 Upload BraTS MRI sequences to begin.")
     st.stop()
 
-validate_braTS_file(t1c_file, "_0000")
-validate_braTS_file(t2f_file, "_0002")
-validate_braTS_file(t2w_file, "_0003")
+volumes: Dict[str, np.ndarray] = {}
+affine_ref = None
 
-if seg_file:
-    validate_braTS_file(seg_file)
+for f in files:
+    name = f.name.lower()
+    matched = False
+
+    for tag, modality in MODALITY_MAP.items():
+        if tag in name:
+            vol, affine = load_nifti(f)
+            volumes[modality] = vol
+            affine_ref = affine
+            matched = True
+            break
+
+    if not matched:
+        st.warning(f"Ignored file (unknown modality): {f.name}")
+
+missing = [m for m in MODALITY_MAP.values() if m not in volumes]
+if missing:
+    st.error(f"Missing modalities: {', '.join(missing)}")
+    st.stop()
+
+modalities_order = ["T1C", "T1N", "T2F", "T2W"]
 
 
 # ==============================
-# Load volumes
+# Load segmentation
 # ==============================
-
-t1c, _ = load_nifti(t1c_file)
-t2f, _ = load_nifti(t2f_file)
-t2w, _ = load_nifti(t2w_file)
-
-volumes = {
-    "T1C": t1c,
-    "T2F": t2f,
-    "T2W": t2w,
-}
 
 seg_volume = None
-seg_affine = None
 label_colors = None
 
 if seg_file:
@@ -183,14 +179,14 @@ if seg_file:
         for i, l in enumerate(labels)
     }
 
-    voxels, mm3, ml = calculate_segmentation_volume(
-        seg_volume, seg_affine
-    )
+    voxels, mm3, ml = calculate_volume(seg_volume, seg_affine)
+    lesions = count_lesions(seg_volume)
 
-    st.sidebar.subheader("Segmentation Volume")
-    st.sidebar.write(f"Voxel count: {voxels:,}")
+    st.sidebar.subheader("Segmentation Metrics")
+    # st.sidebar.write(f"Voxel count: {voxels:,}")
     st.sidebar.write(f"Volume: {mm3:,.2f} mm³")
-    st.sidebar.write(f"Volume: {ml:,.2f} ml")
+    # st.sidebar.write(f"Volume: {ml:,.2f} ml")
+    st.sidebar.write(f"Number of lesions: {lesions}")
 
 
 # ==============================
@@ -199,21 +195,15 @@ if seg_file:
 
 axis = 2
 max_slices = min(v.shape[axis] for v in volumes.values())
+slice_idx = st.slider("Axial slice", 0, max_slices - 1, max_slices // 2)
 
-slice_idx = st.slider(
-    "Axial slice index",
-    0,
-    max_slices - 1,
-    max_slices // 2,
-)
+cols = st.columns(4)
 
-cols = st.columns(3)
-
-for col, (name, vol) in zip(cols, volumes.items()):
+for col, mod in zip(cols, modalities_order):
     with col:
-        img = resize_img(get_slice(vol, axis, slice_idx))
+        img = resize_img(get_slice(volumes[mod], axis, slice_idx))
 
-        if seg_volume is not None and seg_volume.shape == vol.shape:
+        if seg_volume is not None and seg_volume.shape == volumes[mod].shape:
             seg_slc = resize_mask(
                 get_slice(seg_volume, axis, slice_idx)
             )
@@ -221,6 +211,6 @@ for col, (name, vol) in zip(cols, volumes.items()):
 
         st.image(
             img,
-            caption=f"{name} — Axial {slice_idx}",
+            caption=f"{mod} — Axial {slice_idx}",
             use_column_width=True,
         )
