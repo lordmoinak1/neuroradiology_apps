@@ -56,8 +56,8 @@ def get_slice(vol, axis, idx):
     slc = np.take(vol, idx, axis=axis)
     slc = normalize_slice(slc)
 
-    # Rotate 180 degrees (2 × 90° rotations)
-    return np.rot90(slc, k=1)
+    # Rotate 180 degrees (3 × 90° rotations)
+    return np.rot90(slc, k=3)
 
 def resize_img(img, size=256):
     im = Image.fromarray((img * 255).astype(np.uint8))
