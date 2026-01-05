@@ -96,8 +96,8 @@ def per_lesion_volumes(seg, affine):
 # Streamlit UI
 # ==============================
 
-st.set_page_config(page_title="NeuroINK Longitudinal Viewer", layout="wide")
-st.title("🧠 NeuroINK — Longitudinal MRI Viewer")
+st.set_page_config(page_title="NeuroTracker", layout="wide")
+st.title("🧠 NeuroTracker — Longitudinal Quantitative Tumor Tracking")
 
 files = st.file_uploader(
     "Upload all BraTS-GLI .nii.gz files (MRI + seg)",
@@ -213,7 +213,7 @@ with viewer_col:
 # ==============================
 
 with metrics_col:
-    st.subheader("📊 Metrics")
+    # st.subheader("📊 Metrics")
 
     for m in metrics_data:
         st.markdown(f"### ⏱ Timepoint {m['tp']}")
