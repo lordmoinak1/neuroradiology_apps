@@ -105,9 +105,9 @@ st.title("🧠 NeuroINK — MRI Viewer")
 with st.sidebar:
     st.header("MRI Sequences")
 
-    t1c_file = st.file_uploader("Upload T1C", type=["nii", "nii.gz", "npy", "npz"], key="t1c")
-    t2f_file = st.file_uploader("Upload T2F", type=["nii", "nii.gz", "npy", "npz"], key="t2f")
-    t2w_file = st.file_uploader("Upload T2W", type=["nii", "nii.gz", "npy", "npz"], key="t2w")
+    t1c_file = st.file_uploader("Upload T1C", type=["nii", "gz", "nii.gz", "npy", "npz"], key="t1c")
+    t2f_file = st.file_uploader("Upload T2F", type=["nii", "gz", "nii.gz", "npy", "npz"], key="t2f")
+    t2w_file = st.file_uploader("Upload T2W", type=["nii", "gz", "nii.gz", "npy", "npz"], key="t2w")
 
     st.header("Segmentation")
     seg_file = st.file_uploader("Upload segmentation", type=["nii", "nii.gz", "npy", "npz"], key="seg")
