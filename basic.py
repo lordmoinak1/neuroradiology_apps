@@ -183,7 +183,7 @@ with viewer_col:
 
         max_slices = min(v.shape[axis] for v in volumes.values())
         slice_idx = st.slider(
-            f"Axial slice — Timepoint {tp_idx}",
+            # f"Axial slice — Timepoint {tp_idx}",
             0,
             max_slices - 1,
             max_slices // 2,
