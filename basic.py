@@ -14,10 +14,10 @@ from scipy.ndimage import label as cc_label
 # ==============================
 
 MODALITY_MAP = {
-    "_0000": "T1C",
-    "_0001": "T1N",
-    "_0002": "T2F",
-    "_0003": "T2W",
+    "-t1c": "T1C",
+    "-t1n": "T1N",
+    "-t2f": "T2F",
+    "-t2w": "T2W",
 }
 MODALITY_ORDER = ["T1C", "T1N", "T2F", "T2W"]
 
@@ -74,7 +74,7 @@ def calculate_volume(seg, affine):
 
 
 def count_lesions(seg):
-    structure = np.ones((3, 3, 3), dtype=int)
+    structure = np.ones((3, 3, 3), dtype=int)  # 26-connectivity
     _, num = cc_label(seg > 0, structure=structure)
     return num
 
@@ -84,10 +84,10 @@ def count_lesions(seg):
 # ==============================
 
 st.set_page_config(page_title="NeuroINK Longitudinal Viewer", layout="wide")
-st.title("🧠 NeuroINK — Longitudinal BraTS Viewer")
+st.title("🧠 NeuroINK — BraTS-GLI Longitudinal Viewer")
 
 files = st.file_uploader(
-    "Drag & drop timepoint folders",
+    "Upload all BraTS-GLI .nii.gz files (all timepoints together)",
     type=["gz"],
     accept_multiple_files=True,
 )
@@ -97,35 +97,37 @@ if not files:
 
 
 # ==============================
-# Group files by timepoint
+# Group files by timepoint ID
 # ==============================
 
 timepoints = defaultdict(dict)
 
 for f in files:
-    parts = f.name.split("/")
-    if len(parts) < 2:
-        continue
+    name = f.name.lower()
 
-    tp = parts[0]
-    fname = parts[-1].lower()
-
-    for tag, mod in MODALITY_MAP.items():
-        if tag in fname:
-            timepoints[tp][mod] = f
+    # Extract timepoint ID (everything before modality tag)
+    tp_id = None
+    for tag in MODALITY_MAP:
+        if tag in name:
+            tp_id = name.split(tag)[0]
+            modality = MODALITY_MAP[tag]
+            timepoints[tp_id][modality] = f
             break
+
+    if tp_id is None:
+        st.warning(f"Ignored file (unknown modality): {f.name}")
 
 
 # ==============================
-# Layout: Viewer (LEFT) | Metrics (RIGHT)
+# Layout: Viewer | Metrics
 # ==============================
 
 viewer_col, metrics_col = st.columns([3, 1])
-
 metrics_data = []
 
+
 # ==============================
-# LEFT: Visualization
+# LEFT: Viewer
 # ==============================
 
 with viewer_col:
@@ -148,14 +150,13 @@ with viewer_col:
             volumes[mod] = vol
             affine_ref = affine
 
-        # Find segmentation (same folder, no _000x)
+        # Look for segmentation: same prefix, no modality suffix
         seg_file = next(
             (
                 f
                 for f in files
-                if f.name.startswith(tp)
-                and f.name.lower().endswith(".nii.gz")
-                and "_000" not in f.name
+                if f.name.lower().startswith(tp)
+                and not any(tag in f.name.lower() for tag in MODALITY_MAP)
             ),
             None,
         )
@@ -201,7 +202,7 @@ with metrics_col:
 
     for i, m in enumerate(metrics_data, start=1):
         st.markdown(f"### ⏱ Timepoint {i}")
-        st.markdown(f"**ID:** `{m['timepoint']}`")
+        st.markdown(f"`{m['timepoint']}`")
 
         if m["volume_mm3"] is not None:
             st.markdown(f"- **Volume:** {m['volume_mm3']:,.2f} mm³")
