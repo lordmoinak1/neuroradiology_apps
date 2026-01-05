@@ -1,7 +1,7 @@
 import io
 import os
 import tempfile
-from typing import Dict, Tuple
+from typing import Tuple
 
 import numpy as np
 import streamlit as st
@@ -17,59 +17,51 @@ except ImportError:
 # Utility functions
 # ==============================
 
-def load_volume(file) -> Tuple[np.ndarray, str, dict]:
+def load_volume(file) -> Tuple[np.ndarray, dict]:
     """
-    Load a 3D volume or 2D image from an uploaded file.
-    Supports .nii, .nii.gz, .npy, .npz, and image files.
-    Returns: (volume, label, metadata)
+    Load a 3D volume from NIfTI / NumPy / image.
+    Returns: volume, metadata
     """
     filename = file.name.lower()
-    label = file.name
     meta = {"affine": None}
 
-    # ---- NIfTI ----
-    if filename.endswith(".nii") or filename.endswith(".nii.gz"):
+    if filename.endswith((".nii", ".nii.gz")):
         if nib is None:
-            raise ImportError("Please install nibabel for NIfTI support.")
+            raise ImportError("Install nibabel for NIfTI support")
 
         suffix = ".nii.gz" if filename.endswith(".nii.gz") else ".nii"
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
             tmp.write(file.read())
-            tmp_path = tmp.name
+            path = tmp.name
 
         try:
-            img = nib.load(tmp_path)
+            img = nib.load(path)
             vol = img.get_fdata().astype(np.float32)
             meta["affine"] = img.affine
         finally:
-            os.remove(tmp_path)
+            os.remove(path)
 
-    # ---- NumPy ----
     elif filename.endswith(".npy"):
         vol = np.load(io.BytesIO(file.read())).astype(np.float32)
 
     elif filename.endswith(".npz"):
         data = np.load(io.BytesIO(file.read()))
-        key = list(data.keys())[0]
-        vol = data[key].astype(np.float32)
-        label = f"{label} ({key})"
+        vol = data[list(data.keys())[0]].astype(np.float32)
 
-    # ---- Image ----
     else:
         img = Image.open(io.BytesIO(file.read())).convert("L")
         vol = np.array(img, dtype=np.float32)[..., None]
 
-    # Ensure (X, Y, Z)
     if vol.ndim == 2:
         vol = vol[..., None]
     elif vol.ndim > 3:
         vol = vol[..., 0]
 
-    return vol, label, meta
+    return vol, meta
 
 
-def get_slice(vol: np.ndarray, axis: int, index: int) -> np.ndarray:
-    slc = np.take(vol, index, axis=axis)
+def get_slice(vol, axis, idx):
+    slc = np.take(vol, idx, axis=axis)
     slc = np.nan_to_num(slc)
     vmin, vmax = slc.min(), slc.max()
     if vmax > vmin:
@@ -79,46 +71,40 @@ def get_slice(vol: np.ndarray, axis: int, index: int) -> np.ndarray:
     return np.rot90(slc)
 
 
-def get_seg_slice(vol: np.ndarray, axis: int, index: int) -> np.ndarray:
-    slc = np.take(vol, index, axis=axis)
-    return np.rot90(np.nan_to_num(slc))
+def resize_img(img, size=256):
+    im = Image.fromarray((img * 255).astype(np.uint8))
+    im = im.resize((size, size), Image.BILINEAR)
+    return np.asarray(im) / 255.0
 
 
-def resize_slice(slc: np.ndarray, size=256) -> np.ndarray:
-    img = Image.fromarray((np.clip(slc, 0, 1) * 255).astype(np.uint8))
-    img = img.resize((size, size), Image.BILINEAR)
-    return np.asarray(img) / 255.0
+def resize_mask(mask, size=256):
+    im = Image.fromarray(mask.astype(np.uint8), "L")
+    im = im.resize((size, size), Image.NEAREST)
+    return np.asarray(im).astype(int)
 
 
-def resize_mask(mask: np.ndarray, size=256) -> np.ndarray:
-    img = Image.fromarray(mask.astype(np.uint8), mode="L")
-    img = img.resize((size, size), Image.NEAREST)
-    return np.asarray(img).astype(int)
-
-
-def overlay_segmentation(img, mask, label_colors, alpha=0.4):
+def overlay_segmentation(img, mask, colors, alpha=0.4):
     base = (img * 255).astype(np.uint8)
     rgb = np.stack([base] * 3, axis=-1).astype(np.float32)
 
-    for lab, color in label_colors.items():
+    for lab, col in colors.items():
         region = mask == lab
-        rgb[region] = (1 - alpha) * rgb[region] + alpha * np.array(color)
+        rgb[region] = (1 - alpha) * rgb[region] + alpha * np.array(col)
 
     return np.clip(rgb / 255.0, 0, 1)
 
 
-def calculate_segmentation_volume(seg: np.ndarray, affine=None):
+def calculate_segmentation_volume(seg, affine=None):
     voxel_count = int(np.sum(seg > 0))
-    volume_mm3 = None
-    volume_ml = None
+    mm3 = ml = None
 
     if affine is not None:
         spacing = np.sqrt((affine[:3, :3] ** 2).sum(axis=0))
-        voxel_volume = float(np.prod(spacing))
-        volume_mm3 = voxel_count * voxel_volume
-        volume_ml = volume_mm3 / 1000.0
+        voxel_vol = np.prod(spacing)
+        mm3 = voxel_count * voxel_vol
+        ml = mm3 / 1000.0
 
-    return voxel_count, volume_mm3, volume_ml
+    return voxel_count, mm3, ml
 
 
 # ==============================
@@ -126,47 +112,47 @@ def calculate_segmentation_volume(seg: np.ndarray, affine=None):
 # ==============================
 
 st.set_page_config(page_title="NeuroINK", layout="wide")
-st.title("🧠 NeuroINK — MRI Sequence Viewer")
+st.title("🧠 NeuroINK — MRI Viewer")
 
 with st.sidebar:
     st.header("MRI Sequences")
-    uploaded_files = st.file_uploader(
-        "Upload exactly 3 sequences (T1c, T2f, T2w)",
-        type=["nii", "nii.gz", "npy", "npz"],
-        accept_multiple_files=True,
-    )
+
+    t1c_file = st.file_uploader("Upload **T1C**", type=["nii", "nii.gz", "npy", "npz"])
+    t2f_file = st.file_uploader("Upload **T2F**", type=["nii", "nii.gz", "npy", "npz"])
+    t2w_file = st.file_uploader("Upload **T2W**", type=["nii", "nii.gz", "npy", "npz"])
 
     st.header("Segmentation (optional)")
-    seg_file = st.file_uploader(
-        "Upload segmentation mask",
-        type=["nii", "nii.gz", "npy", "npz"],
-    )
+    seg_file = st.file_uploader("Upload segmentation", type=["nii", "nii.gz", "npy", "npz"])
+
 
 # ==============================
 # Load MRI volumes
 # ==============================
 
-volumes: Dict[str, np.ndarray] = {}
-
-if uploaded_files:
-    for f in uploaded_files:
-        vol, label, _ = load_volume(f)
-        volumes[label] = vol
-
-if len(volumes) != 3:
-    st.warning("Please upload exactly 3 MRI sequences: T1c, T2f, T2w.")
+if not all([t1c_file, t2f_file, t2w_file]):
+    st.info("👈 Upload T1C, T2F, and T2W to begin.")
     st.stop()
+
+t1c, _ = load_volume(t1c_file)
+t2f, _ = load_volume(t2f_file)
+t2w, _ = load_volume(t2w_file)
+
+volumes = {
+    "T1C": t1c,
+    "T2F": t2f,
+    "T2W": t2w,
+}
 
 # ==============================
 # Load segmentation
 # ==============================
 
 seg_volume = None
-seg_affine = None
 label_colors = None
+seg_affine = None
 
-if seg_file is not None:
-    seg_volume, _, meta = load_volume(seg_file)
+if seg_file:
+    seg_volume, meta = load_volume(seg_file)
     seg_affine = meta.get("affine")
 
     labels = np.unique(seg_volume.astype(int))
@@ -174,8 +160,7 @@ if seg_file is not None:
 
     palette = [
         (255, 0, 0), (0, 255, 0), (0, 0, 255),
-        (255, 255, 0), (255, 0, 255),
-        (0, 255, 255), (255, 165, 0),
+        (255, 255, 0), (255, 0, 255), (0, 255, 255)
     ]
 
     label_colors = {
@@ -183,23 +168,22 @@ if seg_file is not None:
         for i, l in enumerate(labels)
     }
 
-    voxel_count, vol_mm3, vol_ml = calculate_segmentation_volume(
-        seg_volume, seg_affine
-    )
+    voxels, mm3, ml = calculate_segmentation_volume(seg_volume, seg_affine)
 
     st.sidebar.subheader("Segmentation Volume")
-    st.sidebar.write(f"Voxel count: {voxel_count:,}")
-    if vol_mm3 is not None:
-        st.sidebar.write(f"Volume: {vol_mm3:,.2f} mm³")
-        st.sidebar.write(f"Volume: {vol_ml:,.2f} ml")
+    st.sidebar.write(f"Voxel count: {voxels:,}")
+    if mm3 is not None:
+        st.sidebar.write(f"Volume: {mm3:,.2f} mm³")
+        st.sidebar.write(f"Volume: {ml:,.2f} ml")
     else:
-        st.sidebar.info("Physical volume unavailable (no voxel spacing).")
+        st.sidebar.info("Physical volume unavailable")
+
 
 # ==============================
 # Axial Viewer
 # ==============================
 
-axis = 2  # axial
+axis = 2
 max_slices = min(v.shape[axis] for v in volumes.values())
 
 slice_idx = st.slider(
@@ -211,14 +195,10 @@ cols = st.columns(3)
 
 for col, (name, vol) in zip(cols, volumes.items()):
     with col:
-        slc = resize_slice(get_slice(vol, axis, slice_idx))
+        img = resize_img(get_slice(vol, axis, slice_idx))
 
         if seg_volume is not None and seg_volume.shape == vol.shape:
-            seg_slc = resize_mask(get_seg_slice(seg_volume, axis, slice_idx))
-            slc = overlay_segmentation(slc, seg_slc, label_colors)
+            seg_slc = resize_mask(get_slice(seg_volume, axis, slice_idx))
+            img = overlay_segmentation(img, seg_slc, label_colors)
 
-        st.image(
-            slc,
-            caption=f"{name} — Axial {slice_idx}",
-            use_column_width=True,
-        )
+        st.image(img, caption=f"{name} — Axial {slice_idx}", use_column_width=True)
