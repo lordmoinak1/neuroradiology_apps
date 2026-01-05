@@ -99,8 +99,8 @@ def count_lesions(seg):
 # Streamlit UI
 # ==============================
 
-st.set_page_config(page_title="NeuroTrack", layout="wide")
-st.title("🧠 NeuroTrack")
+st.set_page_config(page_title="NeuroINK BraTS Viewer", layout="wide")
+st.title("🧠 NeuroINK — BraTS Multi-Sequence Viewer")
 
 with st.sidebar:
     st.header("Upload BraTS MRI Sequences")
@@ -183,9 +183,9 @@ if seg_file:
     lesions = count_lesions(seg_volume)
 
     st.sidebar.subheader("Segmentation Metrics")
-    # st.sidebar.write(f"Voxel count: {voxels:,}")
+    st.sidebar.write(f"Voxel count: {voxels:,}")
     st.sidebar.write(f"Volume: {mm3:,.2f} mm³")
-    # st.sidebar.write(f"Volume: {ml:,.2f} ml")
+    st.sidebar.write(f"Volume: {ml:,.2f} ml")
     st.sidebar.write(f"Number of lesions: {lesions}")
 
 
