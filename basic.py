@@ -52,10 +52,12 @@ def normalize_slice(slc):
         slc = np.zeros_like(slc)
     return slc
 
-
 def get_slice(vol, axis, idx):
-    return np.rot90(normalize_slice(np.take(vol, idx, axis=axis)))
+    slc = np.take(vol, idx, axis=axis)
+    slc = normalize_slice(slc)
 
+    # Rotate 180 degrees (2 × 90° rotations)
+    return np.rot90(slc, k=2)
 
 def resize_img(img, size=256):
     im = Image.fromarray((img * 255).astype(np.uint8))
@@ -99,8 +101,8 @@ def count_lesions(seg):
 # Streamlit UI
 # ==============================
 
-st.set_page_config(page_title="NeuroINK BraTS Viewer", layout="wide")
-st.title("🧠 NeuroINK — BraTS Multi-Sequence Viewer")
+st.set_page_config(page_title="NeuroTrack", layout="wide")
+st.title("🧠 NeuroTrack")
 
 with st.sidebar:
     st.header("Upload BraTS MRI Sequences")
@@ -183,9 +185,9 @@ if seg_file:
     lesions = count_lesions(seg_volume)
 
     st.sidebar.subheader("Segmentation Metrics")
-    st.sidebar.write(f"Voxel count: {voxels:,}")
+    # st.sidebar.write(f"Voxel count: {voxels:,}")
     st.sidebar.write(f"Volume: {mm3:,.2f} mm³")
-    st.sidebar.write(f"Volume: {ml:,.2f} ml")
+    # st.sidebar.write(f"Volume: {ml:,.2f} ml")
     st.sidebar.write(f"Number of lesions: {lesions}")
 
 
