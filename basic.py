@@ -20,6 +20,7 @@ MODALITY_MAP = {
     "-t2w": "T2W",
 }
 MODALITY_ORDER = ["T1C", "T1N", "T2F", "T2W"]
+SEG_TAG = "-seg"
 
 
 # ==============================
@@ -87,7 +88,7 @@ st.set_page_config(page_title="NeuroINK Longitudinal Viewer", layout="wide")
 st.title("🧠 NeuroINK — BraTS-GLI Longitudinal Viewer")
 
 files = st.file_uploader(
-    "Upload all BraTS-GLI .nii.gz files (all timepoints together)",
+    "Upload all BraTS-GLI .nii.gz files (MRI + seg)",
     type=["gz"],
     accept_multiple_files=True,
 )
@@ -97,24 +98,30 @@ if not files:
 
 
 # ==============================
-# Group files by timepoint ID
+# Group files by timepoint
 # ==============================
 
-timepoints = defaultdict(dict)
+timepoints = defaultdict(lambda: {"modalities": {}, "seg": None})
 
 for f in files:
     name = f.name.lower()
 
-    # Extract timepoint ID (everything before modality tag)
-    tp_id = None
-    for tag in MODALITY_MAP:
+    # SEGMENTATION
+    if name.endswith("-seg.nii.gz"):
+        tp_id = name.replace("-seg.nii.gz", "")
+        timepoints[tp_id]["seg"] = f
+        continue
+
+    # MRI MODALITIES
+    matched = False
+    for tag, mod in MODALITY_MAP.items():
         if tag in name:
             tp_id = name.split(tag)[0]
-            modality = MODALITY_MAP[tag]
-            timepoints[tp_id][modality] = f
+            timepoints[tp_id]["modalities"][mod] = f
+            matched = True
             break
 
-    if tp_id is None:
+    if not matched:
         st.warning(f"Ignored file (unknown modality): {f.name}")
 
 
@@ -133,9 +140,12 @@ metrics_data = []
 with viewer_col:
     axis = 2
 
-    for tp_idx, (tp, mods) in enumerate(sorted(timepoints.items()), start=1):
+    for tp_idx, (tp, data) in enumerate(sorted(timepoints.items()), start=1):
         st.markdown("---")
         st.subheader(f"⏱ Timepoint {tp_idx}: {tp}")
+
+        mods = data["modalities"]
+        seg_file = data["seg"]
 
         missing = [m for m in MODALITY_ORDER if m not in mods]
         if missing:
@@ -143,23 +153,9 @@ with viewer_col:
             continue
 
         volumes = {}
-        affine_ref = None
-
         for mod in MODALITY_ORDER:
             vol, affine = load_nifti(mods[mod])
             volumes[mod] = vol
-            affine_ref = affine
-
-        # Look for segmentation: same prefix, no modality suffix
-        seg_file = next(
-            (
-                f
-                for f in files
-                if f.name.lower().startswith(tp)
-                and not any(tag in f.name.lower() for tag in MODALITY_MAP)
-            ),
-            None,
-        )
 
         vol_mm3 = None
         lesions = None
