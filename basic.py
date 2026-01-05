@@ -67,17 +67,50 @@ def resize_img(img, size=256):
     return np.asarray(im) / 255.0
 
 
-def calculate_volume(seg, affine):
-    voxels = int(np.sum(seg > 0))
-    spacing = np.sqrt((affine[:3, :3] ** 2).sum(axis=0))
+def resize_mask(mask, size=256):
+    im = Image.fromarray(mask.astype(np.uint8), "L")
+    im = im.resize((size, size), Image.NEAREST)
+    return np.asarray(im).astype(int)
+
+
+def overlay_segmentation(img, mask, alpha=0.4):
+    """
+    Overlay segmentation mask on grayscale image.
+    """
+    base = (img * 255).astype(np.uint8)
+    rgb = np.stack([base] * 3, axis=-1).astype(np.float32)
+
+    # Red overlay for tumor
+    tumor = mask > 0
+    rgb[tumor] = (1 - alpha) * rgb[tumor] + alpha * np.array([255, 0, 0])
+
+    return np.clip(rgb / 255.0, 0, 1)
+
+
+def calculate_spacing(affine):
+    return np.sqrt((affine[:3, :3] ** 2).sum(axis=0))
+
+
+def calculate_total_volume(seg, affine):
+    spacing = calculate_spacing(affine)
     voxel_volume = np.prod(spacing)
+    voxels = int(np.sum(seg > 0))
     return voxels * voxel_volume
 
 
-def count_lesions(seg):
-    structure = np.ones((3, 3, 3), dtype=int)  # 26-connectivity
-    _, num = cc_label(seg > 0, structure=structure)
-    return num
+def calculate_per_lesion_volumes(seg, affine):
+    spacing = calculate_spacing(affine)
+    voxel_volume = np.prod(spacing)
+
+    structure = np.ones((3, 3, 3), dtype=int)
+    labeled, num = cc_label(seg > 0, structure=structure)
+
+    lesion_volumes = {}
+    for lab in range(1, num + 1):
+        voxels = np.sum(labeled == lab)
+        lesion_volumes[lab] = voxels * voxel_volume
+
+    return lesion_volumes
 
 
 # ==============================
@@ -153,25 +186,18 @@ with viewer_col:
             continue
 
         volumes = {}
+        affine_ref = None
+
         for mod in MODALITY_ORDER:
             vol, affine = load_nifti(mods[mod])
             volumes[mod] = vol
+            affine_ref = affine
 
-        vol_mm3 = None
-        lesions = None
+        seg = None
+        seg_affine = None
 
         if seg_file:
             seg, seg_affine = load_nifti(seg_file)
-            vol_mm3 = calculate_volume(seg, seg_affine)
-            lesions = count_lesions(seg)
-
-        metrics_data.append(
-            {
-                "timepoint": tp,
-                "volume_mm3": vol_mm3,
-                "lesions": lesions,
-            }
-        )
 
         max_slices = min(v.shape[axis] for v in volumes.values())
         slice_idx = st.slider(
@@ -186,7 +212,37 @@ with viewer_col:
         for col, mod in zip(cols, MODALITY_ORDER):
             with col:
                 img = resize_img(get_slice(volumes[mod], axis, slice_idx))
+
+                if seg is not None and seg.shape == volumes[mod].shape:
+                    seg_slc = resize_mask(
+                        get_slice(seg, axis, slice_idx)
+                    )
+                    img = overlay_segmentation(img, seg_slc)
+
                 st.image(img, caption=mod, use_column_width=True)
+
+        # ---- Metrics computation ----
+        if seg is not None:
+            total_vol = calculate_total_volume(seg, seg_affine)
+            per_lesion = calculate_per_lesion_volumes(seg, seg_affine)
+
+            metrics_data.append(
+                {
+                    "timepoint": tp,
+                    "total_volume": total_vol,
+                    "lesions": len(per_lesion),
+                    "per_lesion": per_lesion,
+                }
+            )
+        else:
+            metrics_data.append(
+                {
+                    "timepoint": tp,
+                    "total_volume": None,
+                    "lesions": None,
+                    "per_lesion": None,
+                }
+            )
 
 
 # ==============================
@@ -200,10 +256,18 @@ with metrics_col:
         st.markdown(f"### ⏱ Timepoint {i}")
         st.markdown(f"`{m['timepoint']}`")
 
-        if m["volume_mm3"] is not None:
-            st.markdown(f"- **Volume:** {m['volume_mm3']:,.2f} mm³")
-            st.markdown(f"- **Lesions:** {m['lesions']}")
-        else:
+        if m["total_volume"] is None:
             st.markdown("_No segmentation found_")
+            st.markdown("---")
+            continue
+
+        st.markdown(f"- **Total volume:** {m['total_volume']:,.2f} mm³")
+        st.markdown(f"- **Number of lesions:** {m['lesions']}")
+
+        st.markdown("**Per-lesion volumes (mm³):**")
+        for lab, vol in sorted(
+            m["per_lesion"].items(), key=lambda x: x[1], reverse=True
+        ):
+            st.markdown(f"• Lesion {lab}: {vol:,.2f}")
 
         st.markdown("---")
