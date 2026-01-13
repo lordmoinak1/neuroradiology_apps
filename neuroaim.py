@@ -75,16 +75,79 @@ def overlay_segmentation(img, mask, alpha=0.4):
 # Streamlit UI
 # ==============================
 
-st.set_page_config(page_title="NeuroTracker", layout="wide")
-st.title("🧠 NeuroTracker — Single Timepoint Review")
+st.set_page_config(page_title="NeuroAIM", layout="wide")
+st.title("🧠 NeuroAIM — Interactive image quality assessment")
+
+
+# ==============================
+# Radiologist Rating System (TOP)
+# ==============================
+
+st.subheader("🩺 Radiologist Assessment")
+
+if "ratings" not in st.session_state:
+    st.session_state.ratings = {
+        "anatomy": 2,
+        "pathology": 2,
+        "image_quality": 2,
+    }
+
+col_anat, col_path, col_img = st.columns(3)
+
+with col_anat:
+    anatomy = st.radio(
+        "🧠 Anatomy (1–4)",
+        [1, 2, 3, 4],
+        index=st.session_state.ratings["anatomy"] - 1,
+        help="1=Non-diagnostic | 2=Limited | 3=Adequate | 4=Excellent",
+    )
+
+with col_path:
+    pathology = st.radio(
+        "🩻 Pathology (1–3)",
+        [1, 2, 3],
+        index=st.session_state.ratings["pathology"] - 1,
+        help="1=Not assessable | 2=Partial | 3=Clear",
+    )
+
+with col_img:
+    image_quality = st.radio(
+        "🖼️ Image Quality (1–3)",
+        [1, 2, 3],
+        index=st.session_state.ratings["image_quality"] - 1,
+        help="1=Poor | 2=Acceptable | 3=Excellent",
+    )
+
+st.session_state.ratings.update(
+    anatomy=anatomy,
+    pathology=pathology,
+    image_quality=image_quality,
+)
+
+st.markdown(
+    f"""
+    **Current Ratings:**  
+    - Anatomy: **{anatomy}/4**  
+    - Pathology: **{pathology}/3**  
+    - Image Quality: **{image_quality}/3**
+    """
+)
+
+st.markdown("---")
+
+
+# ==============================
+# Upload MRI (BOTTOM)
+# ==============================
 
 files = st.file_uploader(
-    "Upload ONE timepoint (MRI modalities + optional segmentation)",
+    "📤 Upload MRI files (T1C, T1N, T2F, T2W + optional seg)",
     type=["gz"],
     accept_multiple_files=True,
 )
 
 if not files:
+    st.info("Upload MRI files to view images.")
     st.stop()
 
 
@@ -143,59 +206,3 @@ for col, mod in zip(img_cols, MODALITY_ORDER):
             seg_slc = resize_mask(get_slice(seg, axis, slice_idx))
             img = overlay_segmentation(img, seg_slc)
         st.image(img, caption=mod, use_column_width=True)
-
-
-# ==============================
-# Radiologist Rating System
-# ==============================
-
-st.markdown("---")
-st.subheader("🩺 Radiologist Assessment")
-
-if "ratings" not in st.session_state:
-    st.session_state.ratings = {
-        "anatomy": 2,
-        "pathology": 2,
-        "image_quality": 2,
-    }
-
-col_anat, col_path, col_img = st.columns(3)
-
-with col_anat:
-    anatomy = st.radio(
-        "🧠 Anatomy (1–4)",
-        [1, 2, 3, 4],
-        index=st.session_state.ratings["anatomy"] - 1,
-        help="1=Non-diagnostic | 2=Limited | 3=Adequate | 4=Excellent",
-    )
-
-with col_path:
-    pathology = st.radio(
-        "🩻 Pathology (1–3)",
-        [1, 2, 3],
-        index=st.session_state.ratings["pathology"] - 1,
-        help="1=Not assessable | 2=Partial | 3=Clear",
-    )
-
-with col_img:
-    image_quality = st.radio(
-        "🖼️ Image Quality (1–3)",
-        [1, 2, 3],
-        index=st.session_state.ratings["image_quality"] - 1,
-        help="1=Poor | 2=Acceptable | 3=Excellent",
-    )
-
-st.session_state.ratings.update(
-    anatomy=anatomy,
-    pathology=pathology,
-    image_quality=image_quality,
-)
-
-st.success(
-    f"""
-    ✔ Ratings recorded  
-    **Anatomy:** {anatomy}/4  
-    **Pathology:** {pathology}/3  
-    **Image Quality:** {image_quality}/3
-    """
-)
