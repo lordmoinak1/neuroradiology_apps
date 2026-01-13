@@ -77,11 +77,11 @@ def overlay_segmentation(img, mask, alpha=0.4):
 # Streamlit UI
 # ==============================
 
-st.set_page_config(page_title="NeuroTracker", layout="wide")
-st.title("🧠 NeuroTracker — Single Timepoint Review")
+st.set_page_config(page_title="NeuroAIM", layout="wide")
+st.title("🧠 NeuroAIM — Single Timepoint Review")
 
 files = st.file_uploader(
-    "Upload ONE timepoint (MRI modalities + optional seg)",
+    "Upload MRI and seg",
     type=["gz"],
     accept_multiple_files=True,
 )
