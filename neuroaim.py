@@ -5,7 +5,6 @@ import numpy as np
 import streamlit as st
 import nibabel as nib
 from PIL import Image
-from scipy.ndimage import label as cc_label
 
 
 # ==============================
@@ -32,13 +31,12 @@ def load_nifti(file):
     try:
         img = nib.load(path)
         vol = img.get_fdata().astype(np.float32)
-        affine = img.affine
     finally:
         os.remove(path)
 
     if vol.ndim > 3:
         vol = vol[..., 0]
-    return vol, affine
+    return vol
 
 
 def normalize_slice(slc):
@@ -77,11 +75,11 @@ def overlay_segmentation(img, mask, alpha=0.4):
 # Streamlit UI
 # ==============================
 
-st.set_page_config(page_title="NeuroAIM", layout="wide")
-st.title("🧠 NeuroAIM — Single Timepoint Review")
+st.set_page_config(page_title="NeuroTracker", layout="wide")
+st.title("🧠 NeuroTracker — Single Timepoint Review")
 
 files = st.file_uploader(
-    "Upload MRI and seg",
+    "Upload ONE timepoint (MRI modalities + optional segmentation)",
     type=["gz"],
     accept_multiple_files=True,
 )
@@ -115,17 +113,11 @@ if any(m not in modalities for m in MODALITY_ORDER):
 
 
 # ==============================
-# Load data
+# Load volumes
 # ==============================
 
-volumes = {}
-for mod in MODALITY_ORDER:
-    vol, affine = load_nifti(modalities[mod])
-    volumes[mod] = vol
-
-seg = None
-if seg_file:
-    seg, _ = load_nifti(seg_file)
+volumes = {mod: load_nifti(modalities[mod]) for mod in MODALITY_ORDER}
+seg = load_nifti(seg_file) if seg_file else None
 
 
 # ==============================
@@ -142,9 +134,9 @@ slice_idx = st.slider(
     max_slices // 2,
 )
 
-cols = st.columns(4)
+img_cols = st.columns(4)
 
-for col, mod in zip(cols, MODALITY_ORDER):
+for col, mod in zip(img_cols, MODALITY_ORDER):
     with col:
         img = resize_img(get_slice(volumes[mod], axis, slice_idx))
         if seg is not None:
@@ -160,20 +152,50 @@ for col, mod in zip(cols, MODALITY_ORDER):
 st.markdown("---")
 st.subheader("🩺 Radiologist Assessment")
 
-if "anatomy_rating" not in st.session_state:
-    st.session_state.anatomy_rating = 2
+if "ratings" not in st.session_state:
+    st.session_state.ratings = {
+        "anatomy": 2,
+        "pathology": 2,
+        "image_quality": 2,
+    }
 
-anatomy_rating = st.radio(
-    "Anatomy (1–3)",
-    options=[1, 2, 3],
-    index=st.session_state.anatomy_rating - 1,
-    help="""
-    1 = Poor anatomical clarity  
-    2 = Adequate anatomy  
-    3 = Excellent anatomical depiction
-    """,
+col_anat, col_path, col_img = st.columns(3)
+
+with col_anat:
+    anatomy = st.radio(
+        "🧠 Anatomy (1–4)",
+        [1, 2, 3, 4],
+        index=st.session_state.ratings["anatomy"] - 1,
+        help="1=Non-diagnostic | 2=Limited | 3=Adequate | 4=Excellent",
+    )
+
+with col_path:
+    pathology = st.radio(
+        "🩻 Pathology (1–3)",
+        [1, 2, 3],
+        index=st.session_state.ratings["pathology"] - 1,
+        help="1=Not assessable | 2=Partial | 3=Clear",
+    )
+
+with col_img:
+    image_quality = st.radio(
+        "🖼️ Image Quality (1–3)",
+        [1, 2, 3],
+        index=st.session_state.ratings["image_quality"] - 1,
+        help="1=Poor | 2=Acceptable | 3=Excellent",
+    )
+
+st.session_state.ratings.update(
+    anatomy=anatomy,
+    pathology=pathology,
+    image_quality=image_quality,
 )
 
-st.session_state.anatomy_rating = anatomy_rating
-
-st.success(f"✔ Anatomy rating recorded: **{anatomy_rating} / 3**")
+st.success(
+    f"""
+    ✔ Ratings recorded  
+    **Anatomy:** {anatomy}/4  
+    **Pathology:** {pathology}/3  
+    **Image Quality:** {image_quality}/3
+    """
+)
