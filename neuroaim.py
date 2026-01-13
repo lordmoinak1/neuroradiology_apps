@@ -1,6 +1,5 @@
 import os
 import tempfile
-from collections import defaultdict
 
 import numpy as np
 import streamlit as st
@@ -51,7 +50,7 @@ def normalize_slice(slc):
 def get_slice(vol, axis, idx):
     slc = np.take(vol, idx, axis=axis)
     slc = normalize_slice(slc)
-    return np.rot90(slc, k=1)  # MRI orientation unchanged from your last request
+    return np.rot90(slc, k=1)
 
 
 def resize_img(img, size=256):
@@ -74,33 +73,15 @@ def overlay_segmentation(img, mask, alpha=0.4):
     return np.clip(rgb / 255.0, 0, 1)
 
 
-def spacing_from_affine(affine):
-    return np.sqrt((affine[:3, :3] ** 2).sum(axis=0))
-
-
-def total_volume_mm3(seg, affine):
-    voxel_vol = np.prod(spacing_from_affine(affine))
-    return int(np.sum(seg > 0)) * voxel_vol
-
-
-def per_lesion_volumes(seg, affine):
-    voxel_vol = np.prod(spacing_from_affine(affine))
-    labeled, num = cc_label(seg > 0, structure=np.ones((3, 3, 3)))
-    return {
-        lab: np.sum(labeled == lab) * voxel_vol
-        for lab in range(1, num + 1)
-    }
-
-
 # ==============================
 # Streamlit UI
 # ==============================
 
 st.set_page_config(page_title="NeuroTracker", layout="wide")
-st.title("🧠 NeuroTracker — Longitudinal Quantitative Tumor Tracking")
+st.title("🧠 NeuroTracker — Single Timepoint Review")
 
 files = st.file_uploader(
-    "Upload all BraTS-GLI .nii.gz files (MRI + seg)",
+    "Upload ONE timepoint (MRI modalities + optional seg)",
     type=["gz"],
     accept_multiple_files=True,
 )
@@ -110,120 +91,89 @@ if not files:
 
 
 # ==============================
-# Group files by timepoint
+# Parse uploaded files
 # ==============================
 
-timepoints = defaultdict(lambda: {"modalities": {}, "seg": None})
+modalities = {}
+seg_file = None
 
 for f in files:
     name = f.name.lower()
 
     if name.endswith("-seg.nii.gz"):
-        tp_id = name.replace("-seg.nii.gz", "")
-        timepoints[tp_id]["seg"] = f
+        seg_file = f
         continue
 
     for tag, mod in MODALITY_MAP.items():
         if tag in name:
-            tp_id = name.split(tag)[0]
-            timepoints[tp_id]["modalities"][mod] = f
+            modalities[mod] = f
             break
 
-
-# ==============================
-# Layout
-# ==============================
-
-viewer_col, metrics_col = st.columns([3, 1])
-metrics_data = []
+if any(m not in modalities for m in MODALITY_ORDER):
+    st.error("Missing one or more required modalities (T1C, T1N, T2F, T2W)")
+    st.stop()
 
 
 # ==============================
-# LEFT: Viewer
+# Load data
 # ==============================
 
-with viewer_col:
-    axis = 2
+volumes = {}
+for mod in MODALITY_ORDER:
+    vol, affine = load_nifti(modalities[mod])
+    volumes[mod] = vol
 
-    for tp_idx, (_, data) in enumerate(sorted(timepoints.items()), start=1):
-        mods = data["modalities"]
-        seg_file = data["seg"]
+seg = None
+if seg_file:
+    seg, _ = load_nifti(seg_file)
 
-        if any(m not in mods for m in MODALITY_ORDER):
-            continue
 
-        # Row: rotated label + MRIs
-        label_col, *img_cols = st.columns([0.5, 1, 1, 1, 1])
+# ==============================
+# Viewer
+# ==============================
 
-        with label_col:
-            st.markdown(
-                f"""
-                <div style="
-                    transform: rotate(-90deg);
-                    transform-origin: left top;
-                    white-space: nowrap;
-                    font-size: 18px;
-                    font-weight: 600;
-                    margin-top: 140px;
-                ">
-                    ⏱ Timepoint {tp_idx}
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+axis = 2
+max_slices = min(v.shape[axis] for v in volumes.values())
 
-        volumes = {}
-        for mod in MODALITY_ORDER:
-            vol, affine = load_nifti(mods[mod])
-            volumes[mod] = vol
+slice_idx = st.slider(
+    "Axial slice",
+    0,
+    max_slices - 1,
+    max_slices // 2,
+)
 
-        seg = seg_affine = None
-        if seg_file:
-            seg, seg_affine = load_nifti(seg_file)
+cols = st.columns(4)
 
-        max_slices = min(v.shape[axis] for v in volumes.values())
-        slice_idx = st.slider(
-            f"Axial slice — Timepoint {tp_idx}",
-            0,
-            max_slices - 1,
-            max_slices // 2,
-            key=f"slice_{tp_idx}",
-        )
-
-        for col, mod in zip(img_cols, MODALITY_ORDER):
-            with col:
-                img = resize_img(get_slice(volumes[mod], axis, slice_idx))
-                if seg is not None:
-                    seg_slc = resize_mask(get_slice(seg, axis, slice_idx))
-                    img = overlay_segmentation(img, seg_slc)
-                st.image(img, caption=mod, use_column_width=True)
-
+for col, mod in zip(cols, MODALITY_ORDER):
+    with col:
+        img = resize_img(get_slice(volumes[mod], axis, slice_idx))
         if seg is not None:
-            metrics_data.append(
-                {
-                    "tp": tp_idx,
-                    "total": total_volume_mm3(seg, seg_affine),
-                    "per_lesion": per_lesion_volumes(seg, seg_affine),
-                }
-            )
+            seg_slc = resize_mask(get_slice(seg, axis, slice_idx))
+            img = overlay_segmentation(img, seg_slc)
+        st.image(img, caption=mod, use_column_width=True)
 
 
 # ==============================
-# RIGHT: Metrics Pane
+# Radiologist Rating System
 # ==============================
 
-with metrics_col:
-    # st.subheader("📊 Metrics")
+st.markdown("---")
+st.subheader("🩺 Radiologist Assessment")
 
-    for m in metrics_data:
-        st.markdown(f"### ⏱ Timepoint {m['tp']}")
-        st.markdown(f"- **Total volume:** {m['total']:,.2f} mm³")
-        st.markdown(f"- **Lesions:** {len(m['per_lesion'])}")
-        st.markdown("**Per-lesion volume (mm³):**")
+if "anatomy_rating" not in st.session_state:
+    st.session_state.anatomy_rating = 2
 
-        for lab, vol in sorted(
-            m["per_lesion"].items(), key=lambda x: x[1], reverse=True
-        ):
-            st.markdown(f"• Lesion {lab}: {vol:,.2f}")
+anatomy_rating = st.radio(
+    "Anatomy (1–3)",
+    options=[1, 2, 3],
+    index=st.session_state.anatomy_rating - 1,
+    help="""
+    1 = Poor anatomical clarity  
+    2 = Adequate anatomy  
+    3 = Excellent anatomical depiction
+    """,
+)
 
-        st.markdown("---")
+st.session_state.anatomy_rating = anatomy_rating
+
+st.success(f"✔ Anatomy rating recorded: **{anatomy_rating} / 3**")
